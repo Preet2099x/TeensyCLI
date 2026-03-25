@@ -1,29 +1,94 @@
 #!/usr/bin/env python3
 
+import serial
+import serial.tools.list_ports
 import subprocess
 import os
+import time
 
 
-def run_cmd(cmd):
-    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    out, err = p.communicate()
-    return out.decode("utf-8")
-
-
-def list_boards():
-    output = run_cmd(["tycmd", "list"])
-    lines = [l for l in output.splitlines() if l.startswith("add")]
+def get_tycmd_boards():
 
     boards = []
 
-    print("\nConnected Teensy boards:\n")
+    try:
 
-    for i, line in enumerate(lines):
-        parts = line.split()
-        serial = parts[1].split("-")[0]
-        boards.append(serial)
+        output = subprocess.check_output(["tycmd","list"]).decode()
 
-        print(str(i + 1) + ". " + line)
+        for line in output.splitlines():
+
+            if "add" in line:
+
+                parts = line.split()
+
+                serial_num = parts[1].split("-")[0]
+
+                boards.append(serial_num)
+
+    except:
+        pass
+
+    return boards
+
+
+def get_serial_ports():
+
+    ports = {}
+
+    for p in serial.tools.list_ports.comports():
+
+        if "ttyACM" in p.device:
+
+            ports[p.serial_number] = p.device
+
+    return ports
+
+
+def detect_modules():
+
+    tycmd_boards = get_tycmd_boards()
+
+    serial_ports = get_serial_ports()
+
+    boards = []
+
+    print("\nDetected Teensy modules:\n")
+
+    for serial_num in tycmd_boards:
+
+        module_name = None
+
+        if serial_num in serial_ports:
+
+            device = serial_ports[serial_num]
+
+            try:
+
+                ser = serial.Serial(device,115200,timeout=2)
+
+                time.sleep(1)
+
+                ser.write(b'm')
+
+                time.sleep(0.3)
+
+                line = ser.readline().decode(errors='ignore').strip()
+
+                ser.close()
+
+                if "|" in line:
+                    module_name = line
+
+            except:
+                pass
+
+        if module_name is None:
+
+            module_name = serial_num + " | Unknown Module"
+
+        boards.append(serial_num)
+
+        print(str(len(boards)) + ". " + module_name)
 
     return boards
 
@@ -33,70 +98,58 @@ def choose_board(boards):
     choice = input("\nSelect board number: ")
 
     try:
-        idx = int(choice) - 1
-        return boards[idx]
+        return boards[int(choice)-1]
     except:
         print("Invalid selection")
         return None
 
 
-def browse_hex(start_dir="."):
+def find_hex_files():
 
-    current = os.path.abspath(start_dir)
+    hex_files = []
 
-    while True:
-
-        print("\nCurrent directory:", current)
-        print("\nFolders and .hex files:\n")
-
-        items = []
-
-        if current != "/":
-            print("0. .. (go up)")
-            items.append("..")
-
-        files = sorted(os.listdir(current))
+    for root, dirs, files in os.walk("."):
 
         for f in files:
-            path = os.path.join(current, f)
 
-            if os.path.isdir(path):
-                items.append(f)
-                print(str(len(items)) + ". [DIR] " + f)
+            if f.endswith(".hex"):
 
-            elif f.endswith(".hex"):
-                items.append(f)
-                print(str(len(items)) + ". [HEX] " + f)
+                hex_files.append(os.path.join(root,f))
 
-        choice = input("\nSelect item (or 'q' to cancel): ")
+    if not hex_files:
 
-        if choice == "q":
-            return None
+        print("\nNo .hex files found\n")
+        return None
 
-        try:
-            idx = int(choice)
+    print("\nAvailable firmware:\n")
 
-            if idx == 0:
-                current = os.path.dirname(current)
-                continue
+    for i,f in enumerate(hex_files):
 
-            selected = items[idx - 1]
-            path = os.path.join(current, selected)
+        print(str(i+1) + ". " + f)
 
-            if os.path.isdir(path):
-                current = path
-                continue
+    choice = input("\nSelect firmware number: ")
 
-            if selected.endswith(".hex"):
-                return path
-
-        except:
-            print("Invalid selection")
+    try:
+        return hex_files[int(choice)-1]
+    except:
+        return None
 
 
 def upload(board, firmware):
 
-    print("\nUploading firmware:", firmware, "\n")
+    print("\nEntering bootloader...\n")
+
+    subprocess.call([
+        "tycmd",
+        "reset",
+        "--board",
+        board,
+        "--bootloader"
+    ])
+
+    time.sleep(1)
+
+    print("\nUploading " + firmware + "\n")
 
     subprocess.call([
         "tycmd",
@@ -107,43 +160,21 @@ def upload(board, firmware):
     ])
 
 
-def reset_board(board):
-
-    subprocess.call([
-        "tycmd",
-        "reset",
-        "--board",
-        board
-    ])
-
-
-def bootloader(board):
-
-    subprocess.call([
-        "tycmd",
-        "reset",
-        "--board",
-        board,
-        "--bootloader"
-    ])
-
-
 def main():
 
     while True:
 
-        print("\nCommands:")
-        print("list  - list boards")
-        print("exit  - quit")
+        print("\nType 'list' to show Teensy modules")
+        print("Type 'q' to quit")
 
         cmd = input("\nCommand: ")
 
         if cmd == "list":
 
-            boards = list_boards()
+            boards = detect_modules()
 
             if not boards:
-                print("No boards detected")
+                print("No modules detected")
                 continue
 
             board = choose_board(boards)
@@ -151,30 +182,12 @@ def main():
             if not board:
                 continue
 
-            print("\nOptions:")
-            print("1 Upload firmware")
-            print("2 Reset board")
-            print("3 Enter bootloader")
-            print("4 Back")
+            firmware = find_hex_files()
 
-            opt = input("\nSelect option: ")
+            if firmware:
+                upload(board, firmware)
 
-            if opt == "1":
-
-                firmware = browse_hex()
-
-                if firmware:
-                    upload(board, firmware)
-
-            elif opt == "2":
-
-                reset_board(board)
-
-            elif opt == "3":
-
-                bootloader(board)
-
-        elif cmd == "exit":
+        elif cmd == "q":
             break
 
 

@@ -1,5 +1,6 @@
 # Teensy Multi-Board CLI Setup (Jetson)
 
+```bash
 # Install dependencies
 sudo apt update
 sudo apt install build-essential cmake libudev-dev
@@ -38,3 +39,4 @@ chmod +x teensy_cli.py
 
 # Run CLI tool
 python3 teensy_cli.py
+```
